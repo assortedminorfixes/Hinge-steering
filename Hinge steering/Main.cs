@@ -104,7 +104,6 @@ namespace IngameScript
 
 
 
-		// TODO?: Support both types of rotors
 
 		List<Hinge> hinges;
 		IMyCockpit cockpit;
