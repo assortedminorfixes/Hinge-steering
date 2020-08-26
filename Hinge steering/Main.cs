@@ -22,7 +22,7 @@ namespace IngameScript
 		#endregion
 		#region in-game
 
-		//    Blargmode's Hinge steering v1.0.0 (2020-08-22)
+		//    Blargmode's Hinge steering v1.2.0 (2020-08-26)
 
 
 		//    == Description ==
@@ -38,7 +38,9 @@ namespace IngameScript
 
 		//    == Turning the wrong way? ==
 		//    Use the tag on the hinge with a minus sign in front, like this:
-		//    -#steer
+		//
+		//        -#steer
+		//
 		//    Then recompile. That inverts the steering on that hinge.
 
 
@@ -52,6 +54,34 @@ namespace IngameScript
 		//    It's not officially supported, but...
 		//    Yes, it works. Auto straighten won't work unless you set the upper limit.
 		//    Make sure you put the rotor with 0° pointing forward.
+
+
+		//    == Toggle Auto straighten ==
+		//    It can be changed in the settings below, but it can also be toggled while
+		//    driving by running the programmable block with this command:
+		//
+		//        straighten [on|off|onoff]
+		//
+		//    Where the thigns in brackets are optional options. No option is the same as 
+		//    onoff, it toggles it. On and Off forces that option.
+		//    So examples:
+		//
+		//        Toggle: straighten
+		//        But also: straighten onoff
+		//        Set to on: straighten on
+
+
+		//    == Change Axis ==
+		//    By default it uses the turning keys [A] and [D]. You can change this 
+		//    individually per hinge. Just tag it and add one of the following modifiers:
+		//
+		//        turn    (The default value, not needed, using [A] and [D])
+		//        forward    (Using [W] and [S])
+		//        up    (Using [space] and [C])
+		//        roll    (Using [Q] and [E])
+		//
+		//    It would look like this in a name: "Hinge #steer roll"
+		//    Recompile the script after changing this.
 
 
 
@@ -103,7 +133,9 @@ namespace IngameScript
 
 
 
-
+		// Note on the version structure:
+		// v1.0.0
+		// v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
 		List<Hinge> hinges;
 		IMyCockpit cockpit;
@@ -111,25 +143,85 @@ namespace IngameScript
 		bool setupComplete = false;
 
 		const int turnCeil = 30; // How many ticks a button is held to reach max turnig speed
-		int lefts = 0; // Couting how long the left button has been held in ticks.
-		int rights = 0; // Same but right button.
 
 		string errorMsg = "";
 		int setupRetryIn = 0;
+
+		HashSet<ExpiringMessage> expiringMessages;
+
+		Dictionary<ControlAxis, InputCount> inputAxisCounter; // Counting how long a button has been held
+
+		enum ControlAxis
+		{
+			Turn,
+			Forward,
+			Roll,
+			Up
+		}
 
 		struct Hinge
 		{
 			public IMyMotorStator hinge;
 			public int direction; // 1 or -1 to invert a hinge.
+			public ControlAxis axis;
+		}
+
+		struct ExpiringMessage
+		{
+			public DateTime expiry;
+			public string message;
+		}
+
+		class InputCount
+		{
+			public int lefts; // Couting how long the left button has been held in ticks.
+			public int rights; // Same but right button.
 		}
 
 		public Program()
 		{
 			Runtime.UpdateFrequency = UpdateFrequency.Update1 | UpdateFrequency.Update100;
-		}
 
+			expiringMessages = new HashSet<ExpiringMessage>();
+
+			inputAxisCounter = new Dictionary<ControlAxis, InputCount>();
+		}
+		
 		public void Main(string argument, UpdateType updateType)
 		{
+
+			if (argument != "")
+			{
+				var commands = argument.Split(',');
+				bool showAvailableCommands = false;
+
+				foreach (var command in commands)
+				{
+					switch (command.ToLower())
+					{
+						case "straighten on":
+							autoStraighten = true;
+							break;
+						case "straighten off":
+							autoStraighten = false;
+							break;
+						case "straighten toggle":
+						case "straighten onoff":
+						case "straighten":
+							autoStraighten = !autoStraighten;
+							break;
+						default:
+							showAvailableCommands = true;
+							NewExpiringMessage(TimeSpan.FromSeconds(7), $"Error: Couldn't parse command: {command}\n");
+							break;
+					}
+				}
+
+				if (showAvailableCommands)
+				{
+					NewExpiringMessage(TimeSpan.FromSeconds(7), "Available commands:\n> straighten [on|off|onoff]\n");
+				}
+			}
 
 			if ((updateType & UpdateType.Update100) != 0)
 			{
@@ -151,20 +243,25 @@ namespace IngameScript
 
 			if (setupComplete && ((updateType & UpdateType.Update1) != 0) && cockpit.IsUnderControl)
 			{
-				if (cockpit.MoveIndicator.X > 0)
+				foreach (var axis in inputAxisCounter)
 				{
-					if (lefts <= turnCeil) lefts++;
-					rights = 0;
-				}
-				else if (cockpit.MoveIndicator.X < 0)
-				{
-					if (rights <= turnCeil) rights++;
-					lefts = 0;
-				}
-				else // if blabla.X == 0
-				{
-					if (lefts > 0) lefts--;
-					if (rights > 0) rights--;
+					float input = GetInput(axis.Key, cockpit);
+
+					if (input > 0)
+					{
+						if (axis.Value.lefts <= turnCeil) axis.Value.lefts++;
+						axis.Value.rights = 0;
+					}
+					else if (input < 0)
+					{
+						if (axis.Value.rights <= turnCeil) axis.Value.rights++;
+						axis.Value.lefts = 0;
+					}
+					else // if input == 0
+					{
+						if (axis.Value.lefts > 0) axis.Value.lefts--;
+						if (axis.Value.rights > 0) axis.Value.rights--;
+					}
 				}
 
 				foreach (var hinge in hinges)
@@ -172,6 +269,20 @@ namespace IngameScript
 					hinge.hinge.TargetVelocityRPM = CalcHingeVelocity(hinge);
 				}
 			}
+		}
+
+		float GetInput(ControlAxis axis, IMyCockpit cockpit)
+		{
+			switch (axis)
+			{
+				case ControlAxis.Forward:
+					return cockpit.MoveIndicator.Z;
+				case ControlAxis.Roll:
+					return cockpit.RollIndicator;
+				case ControlAxis.Up:
+					return cockpit.MoveIndicator.Y;
+			}
+			return cockpit.MoveIndicator.X;
 		}
 
 		bool Setup()
@@ -191,7 +302,12 @@ namespace IngameScript
 				var h = new Hinge();
 				h.hinge = rotors[0];
 				h.direction = (rotors[0].CustomName.ToLower().Contains("-" + tag) ? -1 : 1);
+				h.axis = CheckControlAxis(rotors[0].CustomName);
 				hinges.Add(h);
+				if (!inputAxisCounter.ContainsKey(h.axis))
+				{
+					inputAxisCounter.Add(h.axis, new InputCount());
+				}
 			}
 			else if (rotors.Count > 1)
 			{
@@ -203,7 +319,12 @@ namespace IngameScript
 						var h = new Hinge();
 						h.hinge = item;
 						h.direction = (item.CustomName.ToLower().Contains("-" + tag) ? -1 : 1);
+						h.axis = CheckControlAxis(item.CustomName);
 						hinges.Add(h);
+						if (!inputAxisCounter.ContainsKey(h.axis))
+						{
+							inputAxisCounter.Add(h.axis, new InputCount());
+						}
 					}
 				}
 			}
@@ -250,19 +371,46 @@ namespace IngameScript
 			return true;
 		}
 
+		ControlAxis CheckControlAxis(string name)
+		{
+			name = name.ToLower();
+			if (name.Contains(tag + " forward"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'forward'");
+				return ControlAxis.Forward;
+			}
+			else if (name.Contains(tag + " roll"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'roll'");
+				return ControlAxis.Roll;
+			}
+			else if (name.Contains(tag + " up"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'up'");
+				return ControlAxis.Up;
+			}
+			else
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to nothing, using 'turn'");
+				return ControlAxis.Turn;
+			}
+		}
+
 		float CalcHingeVelocity(Hinge hinge)
 		{
-			if (cockpit.MoveIndicator.X == 0 && autoStraighten)
+			float input = GetInput(hinge.axis, cockpit);
+			
+			if (input == 0 && autoStraighten)
 			{
-				return -steeringSpeed * (1 - ((float)(lefts + rights) / turnCeil)) * (hinge.hinge.Angle / hinge.hinge.UpperLimitRad);
+				return -steeringSpeed * (1 - ((float)(inputAxisCounter[hinge.axis].lefts + inputAxisCounter[hinge.axis].rights) / turnCeil)) * (hinge.hinge.Angle / hinge.hinge.UpperLimitRad);
 			}
-			else if (cockpit.MoveIndicator.X > 0)
+			else if (input > 0)
 			{
-				return hinge.direction * -steeringSpeed * ((float)lefts / turnCeil) * Clamp(cockpit.MoveIndicator.X, 0, 1);
+				return hinge.direction * -steeringSpeed * ((float)inputAxisCounter[hinge.axis].lefts / turnCeil) * Clamp(input, 0, 1);
 			}
-			else if (cockpit.MoveIndicator.X < 0)
+			else if (input < 0)
 			{
-				return hinge.direction * -steeringSpeed * ((float)rights / turnCeil) * Clamp(cockpit.MoveIndicator.X, -1, 1);
+				return hinge.direction * -steeringSpeed * ((float)inputAxisCounter[hinge.axis].rights / turnCeil) * Clamp(input, -1, 1);
 			}
 			return 0;
 		}
@@ -273,17 +421,29 @@ namespace IngameScript
 
 			if (setupComplete)
 			{
-				text += $"Setup complete. Script {(cockpit.IsUnderControl ? "active" : "idle")}.\nHinges: {hinges.Count}.\nSelected control seat: {cockpit.CustomName}";
+				text += $"Setup complete. Script {(cockpit.IsUnderControl ? "active" : "idle")}.\nHinges: {hinges.Count}.\nSelected control seat: {cockpit.CustomName}\nAuto straighten: {(autoStraighten ? "On" : "Off")}\n\n";
 			}
 			else
 			{
 				if (setupRetryIn > 0)
 				{
-					text += $"Setup failed.\n\n{errorMsg}\n\nRetrying in {setupRetryIn} long seconds.";
+					text += $"Setup failed.\n\n{errorMsg}\n\nRetrying in {setupRetryIn} long seconds.\n\n";
 				}
 				else
 				{
-					text += "Running setup...";
+					text += "Running setup...\n\n";
+				}
+			}
+
+			expiringMessages.RemoveWhere(item => DateTime.Now > item.expiry);
+
+			if (expiringMessages.Count > 0)
+			{
+				text += "____________________\n";
+
+				foreach (var item in expiringMessages)
+				{
+					text += item.message + "\n\n";
 				}
 			}
 
@@ -293,6 +453,15 @@ namespace IngameScript
 		public static float Clamp(float value, float min, float max)
 		{
 			return (value < min) ? min : (value > max) ? max : value;
+		}
+
+		bool NewExpiringMessage(TimeSpan lifeTime, string message)
+		{
+			var m = new ExpiringMessage();
+			m.expiry = DateTime.Now.Add(lifeTime);
+			m.message = message;
+
+			return expiringMessages.Add(m);
 		}
 
 		#endregion
