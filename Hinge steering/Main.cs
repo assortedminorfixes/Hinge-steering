@@ -22,7 +22,7 @@ namespace IngameScript
 		#endregion
 		#region in-game
 
-		//    Blargmode's Hinge steering v1.2.0 (2020-10-16)
+		//    Blargmode's Hinge steering v1.3.1 (2020-10-16)
 
 
 		//    == Description ==
@@ -51,9 +51,11 @@ namespace IngameScript
 
 
 		//    == Does it work with rotors? ==
-		//    It's not officially supported, but...
-		//    Yes, it works. Auto straighten won't work unless you set the upper limit.
-		//    Make sure you put the rotor with 0° pointing forward.
+		//    Yes, but auto straighten won't work unless you set the upper limit.
+		//    It's easier if you put the rotor with 0° pointing forward but you can set
+		//    a center offset by adding e.g. "c90" to the rotor's name. c is for center,
+		//    90 is for 90°. You can also use negative values. 
+		//    Center offset works on hinges too. Recompile the script after changing this. 
 
 
 		//    == Toggle Auto straighten ==
@@ -134,7 +136,7 @@ namespace IngameScript
 
 
 		// Note on the version structure:
-		// v1.2.0
+		// v1.3.1
 		// v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
 		List<Hinge> hinges;
@@ -165,6 +167,7 @@ namespace IngameScript
 			public IMyMotorStator hinge;
 			public int direction; // 1 or -1 to invert a hinge.
 			public ControlAxis axis;
+			public float center; // Offset from 0°. Mostly for if you place a rotor in the wrong rotation.
 		}
 
 		struct ExpiringMessage
@@ -306,6 +309,7 @@ namespace IngameScript
 				h.hinge = rotors[0];
 				h.direction = (rotors[0].CustomName.ToLower().Contains("-" + tag) ? -1 : 1);
 				h.axis = CheckControlAxis(rotors[0].CustomName);
+				h.center = CheckOffset(rotors[0].CustomName);
 				hinges.Add(h);
 				if (!inputAxisCounter.ContainsKey(h.axis))
 				{
@@ -323,6 +327,7 @@ namespace IngameScript
 						h.hinge = item;
 						h.direction = (item.CustomName.ToLower().Contains("-" + tag) ? -1 : 1);
 						h.axis = CheckControlAxis(item.CustomName);
+						h.center = CheckOffset(item.CustomName);
 						hinges.Add(h);
 						if (!inputAxisCounter.ContainsKey(h.axis))
 						{
@@ -379,29 +384,50 @@ namespace IngameScript
 			name = name.ToLower();
 			if (name.Contains(tag + " forward"))
 			{
-				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'forward'");
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'forward' from '{name}'");
 				return ControlAxis.Forward;
 			}
 			else if (name.Contains(tag + " roll"))
 			{
-				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'roll'");
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'roll' from '{name}'");
 				return ControlAxis.Roll;
 			}
 			else if (name.Contains(tag + " up"))
 			{
-				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'up'");
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'up' from '{name}'");
 				return ControlAxis.Up;
 			}
 			else if (name.Contains(tag + " none"))
 			{
-				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'none'");
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'none' from '{name}'");
 				return ControlAxis.None;
 			}
 			else
 			{
-				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to nothing, using 'turn'");
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"No buttons parsed from '{name}', using 'turn'");
 				return ControlAxis.Turn;
 			}
+		}
+
+		// Checks if offset is defined and retuns the value converted to radians, or zero.
+		float CheckOffset(string name)
+		{
+			name = name.ToLower();
+			var reg = new System.Text.RegularExpressions.Regex(@"(c-*[0-9])\d*");
+
+			var match = reg.Match(name);
+
+			if (match.Success)
+			{
+				float offset = float.Parse(match.Value.Substring(1));
+
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"{offset.ToString()}° center offset parsed from '{name}'.");
+
+				return MathHelper.ToRadians(offset);
+			}
+
+			NewExpiringMessage(TimeSpan.FromSeconds(60), $"Parsed no center offset angle from '{name}', using 0°.");
+			return 0f;
 		}
 
 		float CalcHingeVelocity(Hinge hinge)
@@ -410,7 +436,7 @@ namespace IngameScript
 			
 			if (input == 0 && autoStraighten)
 			{
-				return -steeringSpeed * (1 - ((float)(inputAxisCounter[hinge.axis].lefts + inputAxisCounter[hinge.axis].rights) / turnCeil)) * (hinge.hinge.Angle / hinge.hinge.UpperLimitRad);
+				return -steeringSpeed * (1 - ((float)(inputAxisCounter[hinge.axis].lefts + inputAxisCounter[hinge.axis].rights) / turnCeil)) * ((hinge.hinge.Angle + hinge.center) / hinge.hinge.UpperLimitRad);
 			}
 			else if (input > 0)
 			{
