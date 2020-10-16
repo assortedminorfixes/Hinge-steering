@@ -22,7 +22,7 @@ namespace IngameScript
 		#endregion
 		#region in-game
 
-		//    Blargmode's Hinge steering v1.2.0 (2020-08-26)
+		//    Blargmode's Hinge steering v1.2.0 (2020-10-16)
 
 
 		//    == Description ==
@@ -134,7 +134,7 @@ namespace IngameScript
 
 
 		// Note on the version structure:
-		// v1.0.0
+		// v1.2.0
 		// v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
 		List<Hinge> hinges;
@@ -156,7 +156,8 @@ namespace IngameScript
 			Turn,
 			Forward,
 			Roll,
-			Up
+			Up,
+			None
 		}
 
 		struct Hinge
@@ -281,6 +282,8 @@ namespace IngameScript
 					return cockpit.RollIndicator;
 				case ControlAxis.Up:
 					return cockpit.MoveIndicator.Y;
+				case ControlAxis.None:
+					return 0f;
 			}
 			return cockpit.MoveIndicator.X;
 		}
@@ -388,6 +391,11 @@ namespace IngameScript
 			{
 				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'up'");
 				return ControlAxis.Up;
+			}
+			else if (name.Contains(tag + " none"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"'{name}' parsed to 'none'");
+				return ControlAxis.None;
 			}
 			else
 			{
