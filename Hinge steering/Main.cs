@@ -22,7 +22,7 @@ namespace IngameScript
 		#endregion
 		#region in-game
 
-		//    Blargmode's Hinge steering v1.3.1 (2020-10-16)
+		//    Blargmode's Hinge steering v1.3.2 (2020-11-05)
 
 
 		//    == Description ==
@@ -136,13 +136,13 @@ namespace IngameScript
 
 
 		// Note on the version structure:
-		// v1.3.1
+		// v1.3.2
 		// v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
 		List<Hinge> hinges;
 		IMyCockpit cockpit;
-
-		bool setupComplete = false;
+		
+		State state = State.Setup;
 
 		const int turnCeil = 30; // How many ticks a button is held to reach max turnig speed
 
@@ -152,6 +152,13 @@ namespace IngameScript
 		HashSet<ExpiringMessage> expiringMessages;
 
 		Dictionary<ControlAxis, InputCount> inputAxisCounter; // Counting how long a button has been held
+
+		enum State {
+			Setup = 0, 
+			On = 2,
+			Off = 4,
+			WindDown = 16 // Used after exiting the cockpit while steering. Should be turned off once zero point is reached.
+		}
 
 		enum ControlAxis
 		{
@@ -229,7 +236,7 @@ namespace IngameScript
 
 			if ((updateType & UpdateType.Update100) != 0)
 			{
-				if (!setupComplete)
+				if (state == State.Setup)
 				{
 					if (setupRetryIn > 0)
 					{
@@ -238,45 +245,92 @@ namespace IngameScript
 					else
 					{
 						setupRetryIn = 5; // Retry every 5 100-tick periods.
-						setupComplete = Setup();
+						if (Setup())
+						{
+							state = State.On;
+						}
 					}
 				}
 
 				Echo(Info());
 			}
-
-			if (setupComplete && ((updateType & UpdateType.Update1) != 0) && cockpit.IsUnderControl)
+			
+			if ((updateType & UpdateType.Update1) != 0)
 			{
-				foreach (var axis in inputAxisCounter)
-				{
-					float input = GetInput(axis.Key, cockpit);
+				Update1();
+			}
+		}
 
-					if (input > 0)
+		void Update1()
+		{
+			// Handle state
+			switch (state)
+			{
+				case State.Setup:
+					return;
+
+				case State.On:
+					if (!cockpit.IsUnderControl)
 					{
-						if (axis.Value.lefts <= turnCeil) axis.Value.lefts++;
-						axis.Value.rights = 0;
+						state = State.WindDown;
 					}
-					else if (input < 0)
+					break;
+
+				case State.Off:
+					if (cockpit.IsUnderControl)
 					{
-						if (axis.Value.rights <= turnCeil) axis.Value.rights++;
-						axis.Value.lefts = 0;
+						state = State.On;
 					}
-					else // if input == 0
+					else
 					{
-						if (axis.Value.lefts > 0) axis.Value.lefts--;
-						if (axis.Value.rights > 0) axis.Value.rights--;
+						return;
 					}
+					break;
+
+				case State.WindDown:
+					if (cockpit.IsUnderControl)
+					{
+						state = State.On;
+					}
+					break;
+			}
+
+			foreach (var axis in inputAxisCounter)
+			{
+				float input = GetInput(axis.Key, cockpit);
+
+				if (input > 0)
+				{
+					if (axis.Value.lefts <= turnCeil) axis.Value.lefts++;
+					axis.Value.rights = 0;
 				}
-
-				foreach (var hinge in hinges)
+				else if (input < 0)
 				{
-					hinge.hinge.TargetVelocityRPM = CalcHingeVelocity(hinge);
+					if (axis.Value.rights <= turnCeil) axis.Value.rights++;
+					axis.Value.lefts = 0;
+				}
+				else // if input == 0
+				{
+					if (axis.Value.lefts > 0) axis.Value.lefts--;
+					if (axis.Value.rights > 0) axis.Value.rights--;
 				}
 			}
+
+			float velocities = 0f;
+			foreach (var hinge in hinges)
+			{
+				hinge.hinge.TargetVelocityRPM = CalcHingeVelocity(hinge);
+				velocities += Math.Abs(hinge.hinge.TargetVelocityRPM);
+			}
+			if (state == State.WindDown && velocities == 0) state = State.Off;
 		}
 
 		float GetInput(ControlAxis axis, IMyCockpit cockpit)
 		{
+			// If you leave the cockpit while pressing a button, 
+			// that value stays on. This prevents that.
+			if (!cockpit.IsUnderControl) return 0;
+
 			switch (axis)
 			{
 				case ControlAxis.Forward:
@@ -453,7 +507,7 @@ namespace IngameScript
 		{
 			string text = "== Blarg's Hinge Steering ==\n\n";
 
-			if (setupComplete)
+			if (state != State.Setup)
 			{
 				text += $"Setup complete. Script {(cockpit.IsUnderControl ? "active" : "idle")}.\nHinges: {hinges.Count}.\nSelected control seat: {cockpit.CustomName}\nAuto straighten: {(autoStraighten ? "On" : "Off")}\n\n";
 			}
