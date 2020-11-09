@@ -22,7 +22,7 @@ namespace IngameScript
 		#endregion
 		#region in-game
 
-		//    Blargmode's Hinge steering v1.3.2 (2020-11-05)
+		//    Blargmode's Hinge steering v1.4.0 (2020-11-09)
 
 
 		//    == Description ==
@@ -81,6 +81,8 @@ namespace IngameScript
 		//        forward    (Using [W] and [S])
 		//        up    (Using [space] and [C])
 		//        roll    (Using [Q] and [E])
+		//        yaw    (Using [<] and [>] (and mouse))
+		//        pitch    (Using [^] and [v] (and mouse))
 		//
 		//    It would look like this in a name: "Hinge #steer roll"
 		//    Recompile the script after changing this.
@@ -136,7 +138,7 @@ namespace IngameScript
 
 
 		// Note on the version structure:
-		// v1.3.2
+		// v1.2.3
 		// v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
 		List<Hinge> hinges;
@@ -160,12 +162,16 @@ namespace IngameScript
 			WindDown = 16 // Used after exiting the cockpit while steering. Should be turned off once zero point is reached.
 		}
 
+		// These axis are from a cars perspective.
+		// Should probably be renamed
 		enum ControlAxis
 		{
 			Turn,
 			Forward,
 			Roll,
 			Up,
+			Yaw,
+			Pitch,
 			None
 		}
 
@@ -297,7 +303,7 @@ namespace IngameScript
 
 			foreach (var axis in inputAxisCounter)
 			{
-				float input = GetInput(axis.Key, cockpit);
+				float input = GetInputClamped(axis.Key, cockpit);
 
 				if (input > 0)
 				{
@@ -325,12 +331,17 @@ namespace IngameScript
 			if (state == State.WindDown && velocities == 0) state = State.Off;
 		}
 
+		float GetInputClamped(ControlAxis axis, IMyCockpit cockpit)
+		{
+			return MathHelper.Clamp(GetInput(axis, cockpit), -1, 1);
+		}
+
 		float GetInput(ControlAxis axis, IMyCockpit cockpit)
 		{
 			// If you leave the cockpit while pressing a button, 
 			// that value stays on. This prevents that.
 			if (!cockpit.IsUnderControl) return 0;
-
+			
 			switch (axis)
 			{
 				case ControlAxis.Forward:
@@ -339,6 +350,10 @@ namespace IngameScript
 					return cockpit.RollIndicator;
 				case ControlAxis.Up:
 					return cockpit.MoveIndicator.Y;
+				case ControlAxis.Yaw:
+					return cockpit.RotationIndicator.Y;
+				case ControlAxis.Pitch:
+					return cockpit.RotationIndicator.X;
 				case ControlAxis.None:
 					return 0f;
 			}
@@ -451,6 +466,16 @@ namespace IngameScript
 				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'up' from '{name}'");
 				return ControlAxis.Up;
 			}
+			else if (name.Contains(tag + " yaw"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'yaw' from '{name}'");
+				return ControlAxis.Yaw;
+			}
+			else if (name.Contains(tag + " pitch"))
+			{
+				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'pitch' from '{name}'");
+				return ControlAxis.Pitch;
+			}
 			else if (name.Contains(tag + " none"))
 			{
 				NewExpiringMessage(TimeSpan.FromSeconds(60), $"Buttons parsed as 'none' from '{name}'");
@@ -486,7 +511,7 @@ namespace IngameScript
 
 		float CalcHingeVelocity(Hinge hinge)
 		{
-			float input = GetInput(hinge.axis, cockpit);
+			float input = GetInputClamped(hinge.axis, cockpit);
 			
 			if (input == 0 && autoStraighten)
 			{
