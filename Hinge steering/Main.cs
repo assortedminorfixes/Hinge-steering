@@ -1,4 +1,5 @@
 ﻿using Sandbox.Game.EntityComponents;
+using Sandbox.Game.GameSystems;
 using Sandbox.ModAPI.Ingame;
 using Sandbox.ModAPI.Interfaces;
 using SpaceEngineers.Game.ModAPI.Ingame;
@@ -135,6 +136,8 @@ namespace IngameScript
         // v1.2.3
         // v<backwards compatabillity breaking change> . <backwards compatible feature addition> . <bugfix>
 
+        const int MinTextWidth = 20;
+
         static float pistonVelocityScaling = 10f;
 
         private static readonly MyIni _ini = new MyIni();
@@ -177,6 +180,7 @@ namespace IngameScript
 
         public class HingeOrPiston
         {
+
             public IMyMechanicalConnectionBlock block;
             public bool autoStraightenMe = autoStraighten;
             public int direction; // 1 or -1 to invert a hinge.
@@ -186,9 +190,6 @@ namespace IngameScript
             float steeringSpeed = defaultSteeringSpeed;
             bool UseSafeLimits = defaultUseSafeLimits;
             float SafeLimits = defaultSafeLimits;
-            
-            string name;
-
 
             public HingeOrPiston(IMyMechanicalConnectionBlock item)
             {
@@ -207,6 +208,8 @@ namespace IngameScript
             {
                 _ini.Clear();
 
+                float LowLimit = 0, HighLimit = 1;
+
                 MyIniParseResult result;
 
                 if (!_ini.TryParse(customData, out result) || !_ini.ContainsSection(configSection))
@@ -223,7 +226,11 @@ namespace IngameScript
 
                 if (block is IMyMotorStator)
                 {
+                    IMyMotorStator stator = (IMyMotorStator)block;
                     center = MathHelper.ToRadians(offset);
+                    LowLimit = MathHelper.ToDegrees(stator.LowerLimitRad);
+                    HighLimit = MathHelper.ToDegrees(stator.UpperLimitRad);
+
                 }
                 else
                 {
@@ -237,7 +244,7 @@ namespace IngameScript
 
                 steeringSpeed = _ini.Get(configSection, "SteeringSpeed").ToSingle(defaultSteeringSpeed);
 
-                messages.Add($"Parsed hinge/piston '{block.CustomName}' with Auto straighten: {(autoStraightenMe ? "On" : "Off")}");
+                messages.Add($"Parsed hinge/piston '{block.CustomName}' with Auto straighten: {(autoStraightenMe ? "On" : "Off")}, Center: {offset}, Limits: [{LowLimit}, {HighLimit}]");
 
                 return true;
             }
@@ -355,9 +362,8 @@ namespace IngameScript
             {
                 if (block is IMyMotorStator)
                 {
-                    IMyMotorStator stator = (IMyMotorStator)block;
                     // Rotor limits
-                    return NormalizedPositionForV(stator.Angle);
+                    return NormalizedPositionForV(Position);
                 }
                 else
                 {
@@ -373,8 +379,8 @@ namespace IngameScript
                 {
                     IMyMotorStator stator = (IMyMotorStator)block;
                     // Rotor limits
-                    LowLimit = stator.LowerLimitRad;
-                    HighLimit = stator.UpperLimitRad;
+                    LowLimit = Math.Max(stator.LowerLimitRad, -(float)Math.PI*2);
+                    HighLimit = Math.Min(stator.UpperLimitRad, (float)Math.PI*2);
 
                 }
                 else
@@ -398,12 +404,12 @@ namespace IngameScript
                 if (block is IMyMotorStator)
                 {
                     // Rotors, use angle as a percent of scale
-                    return CurrentPosition() - NormalizedPositionForV(center);
+                    return NormalizedPositionForV(center) - Position;
 
                 }
                 else
                 {
-                    return CurrentPosition() - center;
+                    return center - Position;
                 }
             }
 
@@ -413,11 +419,6 @@ namespace IngameScript
 
                 float limitedSteeringSpeed = steeringSpeed;
 
-                if (input == 0 && autoStraightenMe)
-                {
-                    float turnScalingUp = (1 - ((float)(inputAxisCounter[axis].lefts + inputAxisCounter[axis].rights) / turnCeil));
-                    return -steeringSpeed * turnScalingUp * Clamp(2 * ScaledDeviationFromCenter(), 0.2f, 1f);
-                }
 
                 if (UseSafeLimits)
                 {
@@ -433,6 +434,13 @@ namespace IngameScript
                     limitedSteeringSpeed *= Clamp((1 - pctOfLimit)/(1 - SafeLimits), 0.1f, 1f);
                 }
 
+                if (input == 0 && autoStraightenMe)
+                {
+                    float turnScalingUp = (1 - ((float)(inputAxisCounter[axis].lefts + inputAxisCounter[axis].rights) / turnCeil));
+                    return -steeringSpeed * turnScalingUp * Clamp(10 * ScaledDeviationFromCenter(), 0f, 1f);
+                }
+
+
                 if (input > 0)
                 {
                     return direction * -limitedSteeringSpeed * ((float)inputAxisCounter[axis].lefts / turnCeil) * Clamp(input, 0, 1);
@@ -444,12 +452,22 @@ namespace IngameScript
                 return 0;
             }
 
-            public float CurrentPosition()
+            public float Position
             {
-                if (block is IMyPistonBase)
-                    return ((IMyPistonBase)block).CurrentPosition;
-                else
-                    return ((IMyMotorStator)block).Angle;
+                get
+                {
+                    if (block is IMyPistonBase)
+                        return ((IMyPistonBase)block).CurrentPosition;
+                    else
+                    {
+                        return AngleToNormedAngle(((IMyMotorStator)block).Angle);
+                    }
+                }
+            }
+
+            static float AngleToNormedAngle(float angle)
+            {
+                return (float)(((double)angle + Math.PI) % (2*Math.PI) - Math.PI);
             }
 
             float Velocity
@@ -473,11 +491,12 @@ namespace IngameScript
 
             public string AxisLog(int characterlimit)
             {
-                int barlen = characterlimit - 12;
+                int barlen = characterlimit - 12; // At least 2 characters for bar, plus rest of text
                 float np = Clamp(NormalizedPosition(), 0, 1);
                 int barfilllen = (int)Math.Floor(np * barlen);
                 string bar = "[" + new String('#', barfilllen) + new String('-', barlen - barfilllen) + "]";
                 string message = $"{bar} {NormalizedPosition() * 100,-3:F0}% {Velocity:F2}";
+                return message;
                 return message.Substring(0, characterlimit);
             }
         }
@@ -485,9 +504,17 @@ namespace IngameScript
         public class Cockpit
         {
             IMyCockpit cockpit;
-            IMyTextSurface screen;
-            int ActiveScreen = -1;
-            public int CharacterWidth { get; private set; }
+            DisplayItem screen;
+            public int ScreenCharacterCount { 
+                get
+                {
+                    if (screen != null)
+                    {
+                        return screen.CharacterWidth;
+                    }
+                    return 0;
+                }
+             }
 
             public bool IsUnderControl => cockpit.IsUnderControl;
             public Vector3 MoveIndicator => cockpit.MoveIndicator;
@@ -495,27 +522,120 @@ namespace IngameScript
             public Vector2 RotationIndicator => cockpit.RotationIndicator;
             public string CustomName => cockpit.CustomName;
 
-            public Cockpit(IMyCockpit cockpit, int MovablesCount = 1)
+            public Cockpit(IMyCockpit cockpit, IMyGridTerminalSystem GridTerminalSystem, int MovablesCount = 1)
             {
                 this.cockpit = cockpit;
-                string lcdisplayname;
+                screen = new DisplayItem(cockpit, GridTerminalSystem, MovablesCount);
+            }
+
+            public void Save()
+            {
+                _ini.Clear();
+                // Load any existing INI data so we don't clobber it.
+                _ini.TryParse(cockpit.CustomData);
+
+                if (!_ini.ContainsSection(configSection))
+                {
+                    _ini.AddSection(configSection);
+                }
+                _ini.Set(configSection, "ActiveCockpit", true);
+                if (screen != null)
+                {
+                    _ini.Set(configSection, "ActiveScreen", screen.ScreenSelector);
+                }
+                else
+                {
+                    _ini.Delete(configSection, "ActiveScreen");
+                }
+
+                cockpit.CustomData = _ini.ToString();
+            }
+
+            public void WriteText(string message, bool append = false)
+            {
+                if (screen != null)
+                {
+                    screen.WriteText(message, append);
+                }
+            }
+
+            internal void ScaleToLines(int count)
+            {
+                if (screen != null)
+                {
+                    screen.ScaleToLines(count);
+                }
+            }
+        }
+
+        public class DisplayItem
+        {
+            IMyTextSurface screen;
+            public int CharacterWidth { get; private set; }
+            public string ActiveScreen { get; internal set; }
+            public string ScreenSelector { get; internal set; }
+
+            public DisplayItem(IMyTextSurface textSurface)
+            {
+                screen = textSurface;
+                SetupScreen();
+            }
+
+            public DisplayItem(IMyCockpit cockpit, IMyGridTerminalSystem GridTerminalSystem, int MovablesCount = 1)
+            {
+                string LCDDisplayName;
+                IMyTextSurfaceProvider surfaceProvider = (IMyTextSurfaceProvider)cockpit;
                 IMyTextSurface surface_i;
+                string search_screen = "";
+                int ActiveScreen = -1;
+
                 // Identify Screen for Display and scale it to fit number of axes.
                 if (_ini.TryParse(cockpit.CustomData))
                 {
                     // Have settings already, load them and check if we have everything.
                     ActiveScreen = _ini.Get(configSection, "ActiveScreen").ToInt32(ActiveScreen);
+
+                    if (ActiveScreen == -1)
+                    {
+                        // Check if the active screen was specified using a name instead.
+                        search_screen = _ini.Get(configSection, "ActiveScreen").ToString("");
+                        if (search_screen.Contains(":"))
+                        {
+                            ScreenSelector = search_screen;
+                            // Specified a blockname:lcdnunmber, retry search with that block.
+                            // First look for the  block specified in the ship
+                            IMyTerminalBlock newscreen = GridTerminalSystem.GetBlockWithName(search_screen.Split(':')[0]);
+                            if (newscreen != null && newscreen is IMyTextSurface)
+                            {
+                                screen = (IMyTextSurface)newscreen;
+                            }
+                            else if (newscreen != null && newscreen is IMyTextSurfaceProvider)
+                            {
+                                if (!Int32.TryParse(search_screen.Split(':')[1], out ActiveScreen))
+                                {
+                                    ActiveScreen = -1;
+                                }
+                                surfaceProvider = (IMyTextSurfaceProvider)newscreen;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ScreenSelector = ActiveScreen.ToString();
+                    }
                 }
 
-                if (ActiveScreen == -1)
+                if (ActiveScreen == -1 && screen == null)
                 {
                     float largest_area = 0;
                     // Work on guessing which screen is the best choice.  Start with Main screens, then use the largest screen.
-                    for (int i = 0; i < cockpit.SurfaceCount; i++)
+                    for (int i = 0; i < surfaceProvider.SurfaceCount; i++)
                     {
-                        surface_i = cockpit.GetSurface(i);
-                        lcdisplayname = surface_i.DisplayName.ToLower();
-                        if (lcdisplayname.Contains("main") || lcdisplayname.Contains("large"))
+                        surface_i = surfaceProvider.GetSurface(i);
+                        LCDDisplayName = surface_i.DisplayName.ToLower();
+                        if (LCDDisplayName.Contains("main") || LCDDisplayName.Contains("large")
+                            // If we were passed a screen to search for in search_screen.
+                            || LCDDisplayName.Contains(search_screen.ToLower()))
                         {
                             ActiveScreen = i;
                             screen = surface_i;
@@ -528,17 +648,23 @@ namespace IngameScript
                         }
                     }
                 }
-                else
-                    screen = cockpit.GetSurface(ActiveScreen);
+                else if (screen == null)
+                    screen = surfaceProvider.GetSurface(ActiveScreen);
 
-                if (screen != null)
+                if (screen != null && ScreenSelector == "")
                 {
-                    // Setup Screen
-                    screen = cockpit.GetSurface(ActiveScreen);
-                    screen.ContentType = ContentType.TEXT_AND_IMAGE;
-                    screen.Font = "Monospace";
-                    screen.FontSize = 1;
+                    ScreenSelector = ActiveScreen.ToString();
                 }
+
+                SetupScreen(MovablesCount);
+            }
+
+            void SetupScreen(int MovablesCount = 1)
+            {
+                screen.ContentType = ContentType.TEXT_AND_IMAGE;
+                screen.Font = "Monospace";
+                screen.FontSize = 1;
+                ScaleToLines(MovablesCount);
             }
 
             public void ScaleToLines(int lines)
@@ -552,17 +678,13 @@ namespace IngameScript
                 float Scale = screen.SurfaceSize.Y / fontsize.Y;
                 CharacterWidth = (int)(screen.SurfaceSize.X / (fontsize.X * Scale));
 
+                if(CharacterWidth < MinTextWidth)
+                {
+                    Scale *= ((float)CharacterWidth / (float)MinTextWidth);
+                    CharacterWidth = MinTextWidth;
+                }
+
                 screen.FontSize = Scale;
-            }
-
-            public void Save()
-            {
-                _ini.Clear();
-                _ini.AddSection(configSection);
-                _ini.Set(configSection, "ActiveCockpit", true);
-                _ini.Set(configSection, "ActiveScreen", ActiveScreen);
-
-                cockpit.CustomData = _ini.ToString();
             }
 
             public void WriteText(string message, bool append = false)
@@ -654,7 +776,7 @@ namespace IngameScript
                     StringBuilder sb = new StringBuilder();
                     foreach (HingeOrPiston h in MovableBlocks)
                     {
-                        sb.AppendLine(h.AxisLog(cockpit.CharacterWidth));
+                        sb.AppendLine(h.AxisLog(cockpit.ScreenCharacterCount));
                     }
                     UpdateDisplay(sb.ToString(), false);
                 }
@@ -809,7 +931,7 @@ namespace IngameScript
                     (_ini.TryParse(item.CustomData) && _ini.Get(configSection, "ActiveCockpit").ToBoolean())
                     || cockpits.Count == 1)
                 {
-                    cockpit = new Cockpit(item, MovableBlocks.Count);
+                    cockpit = new Cockpit(item, GridTerminalSystem, MovableBlocks.Count);
                     break;
                 }
             }
